@@ -1,0 +1,667 @@
+---
+title: "PEMmodelR_pipeline"
+format: html
+cache: TRUE
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## 1. Preparing for a new PEM project
+
+The PEMr package is designed to help users access the functions and follow a workflow to create a Predictive Ecosystem Map project. The first step in this process is to prepare the basic working layers for an Area of Interest (AOI). This script pulls functions from the PEMprepR portion of the PEMr package. These packages are currently in development and there maybe breaking changes.
+
+The first step needed is to generate a new PEM project. This will include a new R-studio project, a template folder structure, and a series of template workflow quarto documents.
+
+## Download the latest development version of the packages
+
+```{r}
+#| eval: false
+remotes::install_github("ninoxconsulting/PEMr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMprepr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMsamplr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMmodelr", build_vignettes = TRUE)
+devtools::load_all("D:\\GitHub\\PEMmodelr_original")
+library(PEMr)
+library(PEMprepr)
+require(PEMsamplr)
+require(PEMmodelr)
+require(tictoc)
+library(tidyverse)
+library(sf)
+library(vip)
+require(terra)
+
+```
+
+### Create folder structure for map project
+
+The first step is to decide on the file path where your mapping projects files will be stored. The choose a name for your map project (area of interest (AOI)). If you supply a spatial file of the map area boundary this will be copiedinto the new project files. Supplying this file not required at this stage but is a convenience feature.
+
+```{r}
+#| eval: false
+
+  path = "D:/PEM_AOIs"
+  aoi_name = "Deception_Lake_original"
+  #aoi_file = "D:/GitHub/PEM_pipeline/deception_aoi.gpkg"
+  open=FALSE
+  fid <- read_fid()
+  model_input = read_fid()$dir_3010_inputs$path_abs
+training_input = read_fid()$dir_1030_training_data$path_abs
+```
+
+# read in model parameters
+```{r, eval = FALSE}
+
+fmat <- read.csv(file.path(model_input, "fuzzy_matrix_basic_updated.csv" ))%>%
+  dplyr::select(target, Pred, fVal)
+# select reduced variables
+reduced_vars <- read.csv(file.path(model_input,  "reduced_covariate_list_dem_only.csv")) %>% dplyr::pull()
+nonfor_vars <- read.csv(file.path(model_input,  "reduced_covariate_list.csv")) %>% dplyr::pull()
+
+bgc_pts_subzone <- readRDS(file.path(training_input, "model_input_pts.rds"))
+extra_data <- readRDS(file.path(training_input, "extra_training_all.rds"))
+best_tune <- fread(file.path(model_input, "best_tuning_dem_only.csv"))
+mtry <- best_tune$mtry
+min_n <- best_tune$min_n
+map.key  <- read.csv("./_MapUnitLegend/MapUnitLegend.csv")
+
+```
+
+### run base model
+
+```{r pressure, echo=FALSE}
+model_draft = read_fid()$dir_3020_draft$path_abs
+
+xx=1
+model_bgc <- lapply(names(bgc_pts_subzone), function(xx) {
+  
+  xx <- names(bgc_pts_subzone[xx])
+  
+  alldat = bgc_pts_subzone[[xx]] %>% arrange(mapunit1)
+  extradat = extra_data %>% filter(bgc == xx)
+  outDir = file.path(model_draft, xx)
+  
+  dir.create(file.path(outDir, "raw_outputs"))
+  detailed_outdir <- file.path(outDir, "raw_outputs")
+ 
+  tdat <- alldat %>% mutate(slice = factor(slice))
+  tdat <- tdat %>%
+    dplyr::select(id, mapunit1, mapunit2, position,
+      transect_id, tid, slice, any_of(reduced_vars))
+  
+  tdat <- tdat[complete.cases(tdat[, 8:length(tdat)]), ]
+  
+  train_data <- tdat 
+
+  train_data <- droplevels(train_data)
+  
+  baseout <- run_base_model(
+      train_data,
+      fuzz_matrix = fmat,
+      mtry = mtry,
+      min_n = min_n,
+      use.neighbours = TRUE, 
+      detailed_output = FALSE, 
+      out_dir = detailed_outdir)
+  
+  write.csv(baseout, file.path(detailed_outdir, "acc_base_results.csv"))
+  
+  ## generate model accuracy report
+  #model_report(train_data, baseout, outDir)
+  
+})
+
+```
+
+generate models with various training set rebalancing
+```{r}
+
+bal_bgc <- lapply(names(bgc_pts_subzone), function(xx) {
+  
+  xx <- names(bgc_pts_subzone[xx])
+  
+  alldat = bgc_pts_subzone[[xx]]
+  
+  outDir = file.path(model_draft, xx)
+  dir.create(file.path(outDir))
+  #outDir <- file.path(outDir, "balance")
+  
+  tdat <- alldat %>% mutate(slice = factor(slice))
+  tdat <- tdat %>%
+    dplyr::select(id,mapunit1, mapunit2, position,
+      transect_id, tid, slice, any_of(reduced_vars))
+  
+  tdat <- tdat[complete.cases(tdat[, 8:length(tdat)]), ]
+  tdat <- droplevels(tdat)
+  
+  balance_optimisation_iteration(
+      train_data = tdat,
+      fuzz_matrix = fmat,
+      ds_iterations = c(10,20,30,40,50,60),#,20,30),#10,20, multiples of least common class
+      smote_iterations = c(0.1, 0.2),#, 0.6, 0.7,0.8, 0.9), percentage of dominant class
+      mtry = mtry,
+      min_n = min_n,
+      use.neighbours = TRUE,
+      out_dir = outDir,
+      detailed_output = FALSE
+  )
+  
+})
+
+```
+
+# Consolidate all balancing options and find optimum
+
+```{r consolidate acc outputs and graph, echo = FALSE, fig.width=8, fig.height=8}
+
+# combine all balance options into a single data table
+acc_total <- foreach::foreach(xx = names(bgc_pts_subzone), .errorhandling = "pass",.combine = rbind) %do% {
+  #k = data_list[2]
+  # print(k)
+  #xx = "ESSFmc"
+  outDir = file.path(model_draft, xx)
+  allacc <- combine_balance_ouputs(outDir)
+  allacc <- allacc %>% dplyr::mutate(bgc = xx)
+  
+}
+
+# select the best metrics for each Bec variant 
+
+bgcs <- unique(as.factor(acc_total$bgc)) %>% droplevels()
+
+best_balance <- foreach(b = levels(bgcs), .combine=rbind) %do% {
+  #b <- bgcs[b]
+  
+  acc_bgc <- acc_total %>% dplyr::filter(bgc %in% b)
+  best_metrics <- select_best_acc(acc_bgc) %>% 
+    mutate(bgc = b)
+  
+  best_metrics
+  
+}
+
+in_dir <- fid$model_inputs0310[2]
+
+write.csv(best_balance, file.path(model_draft, "best_balancing_dem.csv"))
+
+
+```
+
+### Build final model for each BGC using best balance ratio
+```{r}
+model_draft = read_fid()$dir_3020_draft$path_abs
+best_balance <- fread(file.path(model_draft, "best_balancing_dem.csv"))
+model_final = read_fid()$dir_3030_final$path_abs
+## select the balance otption 
+#[1] "aspat_paf_theta.5" "aspat_paf_theta0" 
+#[3] "aspat_paf_theta1"  "aspatial_sum"     
+#[5] "spat_paf_theta.5"  "spat_paf_theta0"  
+#[7] "spat_paf_theta1"   "spatial_sum"      
+#[9] "overall"  
+
+mbal <-"overall" 
+#mbal <- "raw"
+
+if(mbal== "raw") {
+  
+  mbaldf <- best_balance %>% dplyr::filter(maxmetric == "overall") %>%
+  select(bgc, balance, ds_ratio, sm_ratio) %>%
+  mutate(balance = "raw",
+         ds_ratio = NA, 
+         sm_ratio = NA)
+} else {
+  
+  mbaldf <- best_balance %>% dplyr::filter(maxmetric == mbal) %>%
+  select(bgc, balance, ds_ratio, sm_ratio) 
+
+}
+
+model_bgc <- lapply(names(bgc_pts_subzone), function(xx) {
+  
+  xx <- names(bgc_pts_subzone[xx])
+  
+  print(xx)
+  alldat = bgc_pts_subzone[[xx]]
+
+  outDir = file.path(model_final, xx)
+  dir.create(file.path(outDir))
+  final_data <- alldat %>%
+    dplyr::filter(position == "Orig") %>%
+    dplyr::select(mapunit1, any_of(reduced_vars))
+  
+  final_data <-  final_data[complete.cases(final_data[,2:length(final_data)]),]
+  
+  bgc_bal = mbaldf %>% filter(bgc == xx)
+  ds_ratio = bgc_bal %>% pull(ds_ratio)
+  sm_ratio = bgc_bal %>% pull(sm_ratio)
+  
+  final_model <- run_final_model(
+      final_data,
+      mtry = mtry,
+      min_n = min_n,
+      ds_ratio = ds_ratio, 
+      sm_ratio = sm_ratio)
+  
+  # Output model 
+  saveRDS(final_model, file.path(outDir, paste0("final_model",mbal,"_dem.rds")))
+
+  # generate model accuracy report
+ #final_model_report(bgc_bal, final_data, final_model, outDir)
+
+})
+
+
+```
+
+
+```{r build tiles}
+
+model_dir <- file.path(model_final)
+bec_zones <- as.list(list.files(model_dir))
+
+covdir <- read_fid()$dir_1020_covariates$path_abs
+res_folder = "5m"
+
+# select reduced variables
+reduced_vars <- read.csv(file.path(read_fid()$dir_3010_inputs$path_abs,  "reduced_covariate_list_dem_only.csv")) %>% pull()
+
+# get full raster list 
+rast_list <- list.files(file.path(covdir, res_folder), pattern = ".tif$", full.names = TRUE)
+rast_list <- rast_list[tolower(gsub(".tif", "", basename(rast_list))) %in% (reduced_vars)]
+rstack <- terra::rast(rast_list)
+template <- terra::rast(rast_list[2])
+# generate tiles for mapping 
+
+tile_dir <- file.path(model_dir, "tiles")
+
+if(!dir.exists(file.path(tile_dir))){
+  dir.create(file.path(tile_dir)) 
+  # make tiles (might want to make NA tile )
+  ntiles <- terra::makeTiles(template, 600, filename= file.path(tile_dir, "tile_.tif"),  na.rm=FALSE, overwrite = TRUE)
+}else if(dir.exists(file.path(tile_dir))){
+  ntiles <- list.files(tile_dir, full.names = T)
+}
+
+
+
+```
+
+# loop through the bgcs and predict each tile for forest model
+
+```{r}
+covdir <- read_fid()$dir_1020_covariates$path_abs
+res_folder = "5m"
+model_final = read_fid()$dir_3030_final$path_abs
+tile_dir = file.path(model_final, "tiles")
+ntiles <- list.files(tile_dir, full.names = T)
+rast_list <- list.files(file.path(covdir, res_folder), pattern = ".tif$", full.names = TRUE)
+rast_list <- rast_list[tolower(gsub(".tif", "", basename(rast_list))) %in% (reduced_vars)]
+rstack <- terra::rast(rast_list)
+
+# for each bec zone
+bgcs <- list.dirs(model_final, recursive = F,full.names = FALSE)
+bgcs <- gsub("tiles", '', bgcs)
+
+require(tictoc)
+tic()
+map_bgc <- for(b in bgcs){
+  
+  #b = bgcs[3]
+  
+  mfit = list.files(file.path(model_final, b), recursive = TRUE, pattern = "final_modeloverall_dem.rds", full.names = T)
+  # mfit = mfiles[1]
+  model <- readRDS(file.path(mfit))
+  # make the output dir
+  
+  out_dir <- file.path(model_final, b,"map")
+  # check if out_dir exists
+  if(!dir.exists(file.path(out_dir))){ dir.create(file.path(out_dir))}
+  
+  predict_map(model, out_dir, tile_size = 600, tile_dir, rstack, probability = FALSE)
+   
+} 
+toc()
+
+# readRDS(file.path(model_dir, "ESSFmc","final_modeloverall_dem.rds")) %>% #workflows::pull_workflow_fit() %>% 
+#    workflows::extract_fit_parsnip() %>%  vip::vip()
+```
+Merge mapunit keys
+
+```{r merge mapunits modelled}
+model_dir <- file.path(read_fid()$dir_3030_final$path_abs)
+vector_path <- read_fid()$dir_0010_vector$path_abs
+bec_shp <- st_read(file.path(vector_path,"bec.gpkg"), quiet = TRUE) %>%
+   dplyr::select(MAP_LABEL)
+aoi <- st_read(file.path(vector_path, "aoi.gpkg"), quiet = TRUE)
+map.key  <- read.csv("./_MapUnitLegend/Deception_MapUnitLegend.csv")
+folders <- as.list(c("ESSFmc", "ESSFmcw", "SBSmc2")) 
+
+folders <- as.list(c("ESSFmc", "ESSFmcw", "SBSmc2")) 
+# step 1:  set up a key for the combined map (includes all the units)
+rkey <- lapply(folders, function (f){
+  
+  keys <- read.csv(file.path(model_dir, f, "map", "response_names.csv")) %>%
+    mutate(model  = f)
+})
+
+rkey <- do.call("rbind", rkey)
+rkey <- rkey %>% dplyr::mutate(map.response = seq(1:length(X)))
+
+```
+
+Merge the maps together 
+```{r merge maps}
+combo_map <- lapply(folders, function(f){
+  
+  # f <- folders[[1]]
+  
+  rtemp <- rast(file.path(model_dir, f, "map", "mosaic.tif"))
+  
+  rtemp[is.na(rtemp[])] <- 0 
+  
+  # filter to only predict over bgc
+  bec_filter <- bec_shp %>%
+    filter(MAP_LABEL == f) %>%
+    dplyr::select(MAP_LABEL) 
+  
+  rtemp <- terra::mask(rtemp, bec_filter)
+  
+  subkey <- rkey %>% dplyr::filter(model == f) %>%
+    mutate(mosaic = as.numeric(rownames(.)))
+  
+  # check if the key matches or needs reclassification 
+  if (isTRUE(unique(subkey$mosaic == subkey$map.response))) {
+    
+    print("matching key")
+    
+  } else {
+    
+    print("updating key")
+    
+    m <- subkey %>%
+      mutate(to = as.numeric(X), 
+             from = as.numeric(X)+1) %>%
+      dplyr::select(to, from, map.response) 
+    
+    reclm <-  as.matrix(m, ncol=3, byrow= TRUE)
+    rtemp <-  terra::classify(rtemp, reclm, right = FALSE)#, include.lowest=TRUE)
+    
+  }
+  
+  rtemp <- terra::classify(rtemp, cbind(-Inf, 0, NA), include.lowest=TRUE)
+  rtemp
+  
+})
+
+
+# join all the maps together
+
+if(length(folders) == 3) {
+  
+  all_map <- merge(combo_map[[1]], combo_map[[2]], combo_map[[3]])
+ 
+} 
+
+# all_key <- merge(combo_map[[1]], combo_map[[2]], overlap=TRUE)
+# all_key <- merge(all_key, combo_map[[3]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[4]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[5]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[6]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[7]], overlap = TRUE)
+
+# tidy key and output maps
+rkey <- rkey %>% dplyr::select(map.response, model, X, .pred_class)
+
+map_raster <- read_fid()$dir_4010_raster$path_abs
+
+terra::writeRaster(all_map, filename = file.path(map_raster, "forest_mosaic_dem.tif"), overwrite = TRUE)
+
+write.csv(rkey, file.path(map_raster, "response_combo_bcgs_key.csv"), row.names = FALSE)
+```
+
+build forest vs non-forest model using complete covariate set and just transect data
+training data. Convert all site series to forest in transect data. Add in training points for clearcuts as forest points?, water (lakes), wetlands
+
+```{r}
+model_draft = read_fid()$dir_3020_draft$path_abs
+best_balance <- fread(file.path(model_draft, "best_balancing_dem.csv"))
+model_final = read_fid()$dir_3030_final$path_abs
+
+covdir <- read_fid()$dir_1020_covariates$path_abs
+res_folder = "5m"
+
+map.key  <- read.csv("./_MapUnitLegend/MapUnitLegend_new.csv")
+# select reduced variables
+reduced_vars <- read.csv(file.path(read_fid()$dir_3010_inputs$path_abs,  "nonfor_covariate_list.csv")) %>% pull()
+
+# get full raster list 
+rast_list <- list.files(file.path(covdir, res_folder), pattern = ".tif$", full.names = TRUE)
+
+rast_list <- rast_list[tolower(gsub(".tif", "", basename(rast_list))) %in% (reduced_vars)]
+duplicated(rast_list)
+#remove(rstack)
+rstack <- terra::rast(rast_list)
+xx <- names(rstack) %>% as.data.frame %>% rename(variable = 1) %>% count(variable)
+## select the balance otption 
+#[1] "aspat_paf_theta.5" "aspat_paf_theta0" 
+#[3] "aspat_paf_theta1"  "aspatial_sum"     
+#[5] "spat_paf_theta.5"  "spat_paf_theta0"  
+#[7] "spat_paf_theta1"   "spatial_sum"      
+#[9] "overall"  
+map.key2 <- setDT(map.key)
+mbal <-"overall" 
+#mbal <- "raw"
+
+# if(mbal== "raw") {
+#   
+#   mbaldf <- best_balance %>% dplyr::filter(maxmetric == "overall") %>%
+#   select(bgc, balance, ds_ratio, sm_ratio) %>%
+#   mutate(balance = "raw",
+#          ds_ratio = NA, 
+#          sm_ratio = NA)
+# } else {
+#   
+#   mbaldf <- best_balance %>% dplyr::filter(maxmetric == mbal) %>%
+#   select(bgc, balance, ds_ratio, sm_ratio) 
+# 
+# }
+xx=1
+model_bgc <- lapply(names(bgc_pts_subzone), function(xx) {
+  
+  xx <- names(bgc_pts_subzone[xx])
+  
+  print(xx)
+  alldat = bgc_pts_subzone[[xx]]
+  alldat <- setDT(alldat)
+  alldat[map.key2, mapunit1 := MapUnit_nonforest_model, on = c("mapunit1" = "MapUnit_forest_model")]
+  alldat[map.key2, mapunit2 := MapUnit_nonforest_model, on = c("mapunit2" = "MapUnit_forest_model")]
+  
+
+  outDir = file.path(model_final, xx)
+  dir.create(file.path(outDir))
+  final_data <- alldat %>%
+    dplyr::filter(position == "Orig") %>%
+    dplyr::select(mapunit1, any_of(nonfor_vars))
+  
+  final_data <-  final_data[complete.cases(final_data[,2:length(final_data)]),]
+})
+```
+bring in extra training points
+```{r}
+training_dir <- read_fid()$dir_1030_training_data$path_abs
+removed.units <- c("F", "FO", "A/FO", "FX", "PC")
+extra_train <- st_read(file.path(training_dir,"r1_neighbours_att.gpkg"), quiet = TRUE) %>%
+  filter(Position == "Orig", is.na(mapunit2), !mapunit %in% removed.units) %>% data.frame %>% dplyr::select(mapunit1, any_of(nonfor_vars))
+xx <- bind_rows(final_data , extra_train)
+##test
+# extra_shp <- st_read(file.path(training_dir,"r1_neighbours_att.gpkg"), quiet = TRUE) %>%
+#   filter(Position == "Orig", is.na(mapunit2), mapunit == "LA") %>% data.frame %>% select()
+#   
+# rast_list <- list.files(file.path(covdir, res_folder), pattern = ".tif$", full.names = TRUE)
+# rast_list <- rast_list[tolower(gsub(".tif", "", basename(rast_list))) %in% (nonfor_vars)]
+# extrastack <- terra::rast(rast_list)
+
+```
+# Build non-forest model
+```{r}
+# bgc_bal = mbaldf %>% filter(bgc == xx)
+  # ds_ratio = bgc_bal %>% pull(ds_ratio)
+  # sm_ratio = bgc_bal %>% pull(sm_ratio)
+  ds_ratio = 50
+  final_model <- run_final_model_WHM(
+      final_data,
+      extrarun = TRUE, 
+      extradat = extrastack,
+      mtry = mtry,
+      min_n = min_n,
+      ds_ratio = ds_ratio, 
+      sm_ratio = sm_ratio)
+  
+  # Output model 
+  saveRDS(final_model, file.path(outDir, paste0("final_model",mbal,"_nonfor.rds")))
+
+  # generate model accuracy report
+ #final_model_report(bgc_bal, final_data, final_model, outDir)
+
+})
+
+
+```
+
+# loop through the bgcs and predict each tile for nonforest model
+
+```{r}
+covdir <- read_fid()$dir_1020_covariates$path_abs
+res_folder = "5m"
+model_final = read_fid()$dir_3030_final$path_abs
+tile_dir = file.path(model_final, "tiles")
+ntiles <- list.files(tile_dir, full.names = T)
+rast_list <- list.files(file.path(covdir, res_folder), pattern = ".tif$", full.names = TRUE)
+rast_list <- rast_list[tolower(gsub(".tif", "", basename(rast_list))) %in% (nonfor_vars)]
+rstack <- terra::rast(rast_list)
+
+# for each bec zone
+bgcs <- list.dirs(model_final, recursive = F,full.names = FALSE)
+bgcs <- gsub("tiles", '', bgcs)
+
+require(tictoc)
+tic()
+map_bgc <- for(b in bgcs){
+  
+  #b = bgcs[3]
+  
+  mfit = list.files(file.path(model_final, b), recursive = TRUE, pattern = "final_modeloverall_nonfor.rds", full.names = T)
+  # mfit = mfiles[1]
+  model <- readRDS(file.path(mfit))
+  # make the output dir
+  
+  out_dir <- file.path(model_final, b,"nonfor_map")
+  # check if out_dir exists
+  if(!dir.exists(file.path(out_dir))){ dir.create(file.path(out_dir))}
+  
+  predict_map(model, out_dir, tile_size = 600, tile_dir, rstack, probability = FALSE)
+   
+} 
+toc()
+
+# readRDS(file.path(model_dir, "ESSFmc","final_modeloverall_dem.rds")) %>% #workflows::pull_workflow_fit() %>% 
+#    workflows::extract_fit_parsnip() %>%  vip::vip()
+```
+Merge nonfor mapunit keys
+
+```{r merge mapunits modelled}
+model_dir <- file.path(read_fid()$dir_3030_final$path_abs)
+vector_path <- read_fid()$dir_0010_vector$path_abs
+bec_shp <- st_read(file.path(vector_path,"bec.gpkg"), quiet = TRUE) %>%
+   dplyr::select(MAP_LABEL)
+aoi <- st_read(file.path(vector_path, "aoi.gpkg"), quiet = TRUE)
+#map.key  <- read.csv("./_MapUnitLegend/Deception_MapUnitLegend.csv")
+folders <- as.list(c("ESSFmc", "ESSFmcw", "SBSmc2")) 
+
+folders <- as.list(c("ESSFmc", "ESSFmcw", "SBSmc2")) 
+# step 1:  set up a key for the combined map (includes all the units)
+rkey <- lapply(folders, function (f){
+  
+  keys <- read.csv(file.path(model_dir, f, "nonfor_map", "response_names.csv")) %>%
+    mutate(model  = f)
+})
+
+rkey <- do.call("rbind", rkey)
+rkey <- rkey %>% dplyr::mutate(map.response = seq(1:length(X)))
+
+```
+
+Merge the maps together 
+```{r merge maps}
+combo_map <- lapply(folders, function(f){
+  
+  # f <- folders[[1]]
+  
+  rtemp <- rast(file.path(model_dir, f, "nonfor_map", "mosaic.tif"))
+  
+  rtemp[is.na(rtemp[])] <- 0 
+  
+  # filter to only predict over bgc
+  bec_filter <- bec_shp %>%
+    filter(MAP_LABEL == f) %>%
+    dplyr::select(MAP_LABEL) 
+  
+  rtemp <- terra::mask(rtemp, bec_filter)
+  
+  subkey <- rkey %>% dplyr::filter(model == f) %>%
+    mutate(mosaic = as.numeric(rownames(.)))
+  
+  # check if the key matches or needs reclassification 
+  if (isTRUE(unique(subkey$mosaic == subkey$map.response))) {
+    
+    print("matching key")
+    
+  } else {
+    
+    print("updating key")
+    
+    m <- subkey %>%
+      mutate(to = as.numeric(X), 
+             from = as.numeric(X)+1) %>%
+      dplyr::select(to, from, map.response) 
+    
+    reclm <-  as.matrix(m, ncol=3, byrow= TRUE)
+    rtemp <-  terra::classify(rtemp, reclm, right = FALSE)#, include.lowest=TRUE)
+    
+  }
+  
+  rtemp <- terra::classify(rtemp, cbind(-Inf, 0, NA), include.lowest=TRUE)
+  rtemp
+  
+})
+
+
+# join all the maps together
+
+if(length(folders) == 3) {
+  
+  all_map <- merge(combo_map[[1]], combo_map[[2]], combo_map[[3]])
+ 
+} 
+
+# all_key <- merge(combo_map[[1]], combo_map[[2]], overlap=TRUE)
+# all_key <- merge(all_key, combo_map[[3]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[4]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[5]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[6]], overlap = TRUE)
+# all_key <- merge(all_key, combo_map[[7]], overlap = TRUE)
+
+# tidy key and output maps
+rkey <- rkey %>% dplyr::select(map.response, model, X, .pred_class)
+
+map_raster <- read_fid()$dir_4010_raster$path_abs
+
+terra::writeRaster(all_map, filename = file.path(map_raster, "nonforest_mosaic_dem.tif"), overwrite = TRUE)
+
+write.csv(rkey, file.path(map_raster, "nonfor_response_combo_bcgs_key.csv"), row.names = FALSE)
+```

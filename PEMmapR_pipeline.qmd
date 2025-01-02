@@ -1,0 +1,101 @@
+---
+title: "PEMmodelR_pipeline"
+format: html
+cache: TRUE
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## 1. Preparing for a new PEM project
+
+The PEMr package is designed to help users access the functions and follow a workflow to create a Predictive Ecosystem Map project. The first step in this process is to prepare the basic working layers for an Area of Interest (AOI). This script pulls functions from the PEMprepR portion of the PEMr package. These packages are currently in development and there maybe breaking changes.
+
+The first step needed is to generate a new PEM project. This will include a new R-studio project, a template folder structure, and a series of template workflow quarto documents.
+
+## Download the latest development version of the packages
+
+```{r}
+#| eval: false
+remotes::install_github("ninoxconsulting/PEMr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMprepr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMsamplr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMmodelr", build_vignettes = TRUE)
+devtools::load_all("D:\\GitHub\\PEMmodelr_original")
+library(PEMr)
+library(PEMprepr)
+require(PEMsamplr)
+require(PEMmodelr)
+require(tictoc)
+library(tidyverse)
+library(sf)
+library(vip)
+require(terra)
+require(tidyterra)
+
+```
+
+### Create folder structure for map project
+
+The first step is to decide on the file path where your mapping projects files will be stored. The choose a name for your map project (area of interest (AOI)). If you supply a spatial file of the map area boundary this will be copiedinto the new project files. Supplying this file not required at this stage but is a convenience feature.
+
+```{r}
+#| eval: false
+
+  path = "D:/PEM_AOIs"
+  aoi_name = "Deception_Lake_original"
+  #aoi_file = "D:/GitHub/PEM_pipeline/deception_aoi.gpkg"
+  open=FALSE
+  fid <- read_fid()
+  model_input = read_fid()$dir_3010_inputs$path_abs
+
+```
+
+convert initial raster to vector map for review
+```{r}
+source(here::here('_functions', 'raster_to_polygon_terra.R'))
+map_raster <- read_fid()$dir_4010_raster$path_abs
+map_vector <- read_fid()$dir_4020_vector$path_abs
+all_map <- terra::rast(file.path(map_raster, "forest_mosaic_dem.tif"))
+rkey <- fread(file.path(map_raster, "response_combo_bcgs_key_fixed.csv"))
+##############link predicted Zones to Polygons and write shape file
+tic()
+polygon_draft <- raster_to_polygon(rast_in = all_map)
+toc()
+polygon_draft2 <- polygon_draft %>% left_join(rkey,  by = c("pred_no" = "map.response"))
+
+terra::writeVector(polygon_draft2 , filename = file.path(map_vector, "forest_mosaic_dem.gpkg"), overwrite = TRUE)
+# ###Dissolve 
+# #hexZone <- st_read(dsn = "./outputs/WA_bgc_hex8000_ungrouped.gpkg")#, layer = "USA_bgc_hex_800m") ## need to read it back in to ensure all type Polygon is consistent
+# temp3 <- hexZone
+# temp3$BGC <- droplevels(temp3$BGC)
+# temp3 <-  st_as_sf(temp3)# 
+# st_precision(temp3) <- .5 
+# temp3$BGC <- forcats::fct_explicit_na(temp3$BGC,na_level = "(None)")
+# temp3 <- temp3[,c("BGC","Elevation","geom")]
+# t2 <- aggregate(temp3[,-1], by = list(temp3$BGC), do_union = T, FUN = mean) %>% rename(BGC = Group.1)
+# 
+# wna_boundary = st_read("D:/CommonTables/BC_AB_US_Shp/WNA_State_Boundaries.gpkg") %>% st_as_sf() %>% filter(State %in% region) %>%
+#   st_transform( crs = st_crs(3005)) %>%
+#   st_buffer(., dist = 0)# %>%
+#  # as(., "Spatial")
+# 
+# t2 <- st_zm(t2, drop=T, what='ZM') %>% st_transform(crs = st_crs(3005))  %>% st_buffer(0)
+# t2 <- st_intersection(t2, wna_boundary)
+# #mapView(t2)
+# #CRS.102008 <- "+proj=aea +lat_1=20 +lat_2=60 +lat_0=40 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m no_defs"
+# #CRS.102218 <- "+proj=aea +lat_1=43 +lat_2=48 +lat_0=34 +lon_0=-120 +x_0=600000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+# 
+# 
+# #t3 <- st_transform_proj(t3, CRS.102218)
+# #st_is_valid(t3)
+# #t4 <- st_make_valid(t3)## this seems to remove rather than fix problem areas
+#  st_write(t2, dsn = paste0("./outputs/", region, "_SubZoneMap_hex400_dissolved_5AprMay2022_clipped_BC.gpkg"), driver = "GPKG", delete_dsn = TRUE)
+#  toc() ##WA takes approx 200s
+
+```
+
