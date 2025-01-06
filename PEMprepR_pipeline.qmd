@@ -1,0 +1,293 @@
+---
+title: "PEMprepr_pipeline"
+format: html
+cache: TRUE
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## 1. Preparing for a new PEM project
+
+The PEMr package is designed to help users access the functions and follow a workflow to create a Predictive Ecosystem Map project. The first step in this process is to prepare the basic working layers for an Area of Interest (AOI). This script pulls functions from the PEMprepR portion of the PEMr package. These packages are currently in development and there maybe breaking changes.
+
+The first step needed is to generate a new PEM project. This will include a new R-studio project, a template folder structure, and a series of template workflow quarto documents.
+
+## Download the latest development version of the packages
+
+```{r}
+#| eval: false
+remotes::install_github("ninoxconsulting/PEMr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMprepr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMsamplr", build_vignettes = TRUE)
+library(PEMr)
+library(PEMprepr)
+require(PEMsamplr)
+require(tictoc)
+
+```
+
+### Create folder structure for map project
+
+The first step is to decide on the file path where your mapping projects files will be stored. The choose a name for your map project (area of interest (AOI)). If you supply a spatial file of the map area boundary this will be copiedinto the new project files. Supplying this file not required at this stage but is a convenience feature.
+
+```{r}
+#| eval: false
+
+  path = "D:/PEM_AOIs"
+  aoi_name = "Deception_Lake_original"
+  aoi_file = "D:/GitHub/PEM_pipeline/deception_aoi.gpkg"
+  open=FALSE
+  proj_dir <- file.path(path, aoi_name)
+
+  create_pemr_project(
+  path = path,
+  aoi_name = aoi_name,
+  aoi_file = aoi_file ,
+   open=open
+)
+
+
+```
+
+## 2. Generating base data for modelling (5m resolution as default)
+
+```{r setup, eval = FALSE}
+library(PEMr)
+library(PEMprepr)
+
+#project_name <- "{{ aoi_name }}"
+#project_name <- "datecreek_aoi"
+read_fid <- function(fid_path = file.path(proj_dir,"_meta", "fid.rds")) {
+  if (!fs::file_exists(fid_path)) {
+    return(NULL)
+  }
+  readRDS(fid_path)
+}
+
+fid <- read_fid_pl()
+aoi_dir = read_fid_pl()$dir_0010_vector$path_abs
+
+```
+
+### some working copies of scripts for testing
+
+```{r}
+# snap_aoi <- function(
+#     aoi = NULL,
+#     method = c("expand", "shrink"),
+#     buffer = 0,
+#     write_output = TRUE,
+#     out_dir = read_fid()$dir_1010_vector$path_abs) {
+#   method <- match.arg(method)
+# 
+#   if (!is.numeric(buffer)) {
+#     cli::cli_abort("{.var buffer} must be numeric")
+#   }
+# 
+#   aoi <- aoi %||% look_for_aoi()
+# 
+#   aoi <- read_sf_if_necessary(aoi)
+# 
+#   box <- snap_bbox(aoi, method = method, buffer = buffer)
+# 
+#   ## write to file
+#   if (write_output) {
+#     if (!fs::dir_exists(out_dir)) {
+#       fs::dir_create(out_dir, recurse = TRUE)
+#     }
+#     output_file <- fs::path(fs::path_abs(out_dir), "aoi_snapped.gpkg")
+#     if(fs::file_exists(output_file)){
+#       cli::cli_alert_warning(
+#         "Snapped aoi already exists in {.path {output_file}}"
+#       )
+#     }
+#     sf::st_write(box, output_file, append = FALSE, quiet = TRUE)
+#     cli::cat_line()
+#     cli::cli_alert_success(
+#       "Snapped aoi written to {.path {output_file}}"
+#     )
+#   }
+# 
+#   box
+# }
+
+# read_sf_if_necessary <- function(sf_obj, arg = rlang::caller_arg(sf_obj), call = rlang::caller_env()) {
+#   if (inherits(sf_obj, c("character"))) {
+#     sf_obj <- sf::st_read(sf_obj)
+#   } else if (!inherits(sf_obj, c("sf"))) {
+#     cli::cli_abort("{.arg {arg}} must be an sf object or a path to an sf object",
+#       arg = arg, call = call
+#     )
+#   }
+#   sf_obj
+# }
+# 
+# snap_bbox <- function(aoi, method, buffer) {
+#   bb <- sf::st_bbox(aoi)
+# 
+#   cli::cli_alert_info("Initial extent is:")
+#   cli::cli_dl(bb)
+#   cli::cat_line()
+# 
+#   if (method == "expand") {
+#     ## Generate expanded bbox -- expands to neared 100m
+#     xmin <- floor((bb["xmin"] - buffer) / 100) * 100
+#     xmax <- ceiling((bb["xmax"] + buffer) / 100) * 100
+#     ymin <- floor((bb["ymin"] - buffer) / 100) * 100
+#     ymax <- ceiling((bb["ymax"] + buffer) / 100) * 100
+#   } else if (method == "shrink") {
+#     xmin <- ceiling(bb["xmin"] / 100) * 100
+#     xmax <- floor(bb["xmax"] / 100) * 100
+#     ymin <- ceiling(bb["ymin"] / 100) * 100
+#     ymax <- floor(bb["ymax"] / 100) * 100
+#   }
+# 
+#   box <- matrix(
+#     c(xmin, ymin, xmin, ymax, xmax, ymax, xmax, ymin, xmin, ymin),
+#     ncol = 2,
+#     byrow = TRUE
+#   )
+# 
+#   box <- sf::st_polygon(list(box))
+#   box <- sf::st_sfc(box, crs = sf::st_crs(aoi))
+#   box <- sf::st_as_sf(box)
+# 
+#   cli::cli_alert_info(("New extent is:"))
+#   cli::cli_dl(sf::st_bbox(box))
+# 
+#   box
+# }
+# 
+# create_template_raster <- function(
+#     aoi = fs::path(read_fid()$dir_1010_vector$path_abs, "aoi_snapped.gpkg"),
+#     res = 5,
+#     filename = "template.tif",
+#     out_dir = read_fid()$dir_1020_covariates$path_abs,
+#     write_output = TRUE,
+#     overwrite = TRUE,
+#     ...) {
+# 
+#   if (!is.numeric(res)) {
+#     cli::cli_abort("{.var res} must be numeric")
+#   }
+# 
+#   aoi_bb <- terra::vect(aoi)
+# 
+#   template <- terra::rast(aoi_bb, resolution = res)
+#   terra::values(template) <- 0
+# 
+#   ## check if folder exists
+#   if (write_output) {
+#     output_dir <- fs::path(out_dir, paste0(res, "m"))
+# 
+#     if (!fs::dir_exists(fs::path(output_dir))) {
+#       fs::dir_create(fs::path(output_dir), recurse = TRUE)
+#     }
+# 
+#     # check if output file already exists
+#     output_file <- fs::path(output_dir, filename)
+#     if (fs::file_exists(output_file)) {
+#       cli::cli_alert_warning(
+#         "Template raster already exists in {.path {output_file}}"
+#       )
+#     }
+# 
+#     terra::writeRaster(template, output_file, overwrite = overwrite)
+#     cli::cat_line()
+#     cli::cli_alert_success(
+#       "Template raster written to {.path {output_file}}"
+#     )
+#   }
+# 
+#   template
+# }
+```
+
+```{r, eval = FALSE}
+
+aoi_dir = fid$dir_0010_vector$path_abs
+files <- list.files(aoi_dir, pattern = "([.]gpkg)|([.]shp)$")
+aoi_file = fs::path(aoi_dir, files)
+
+# vector
+aoi <- snap_aoi(aoi = aoi_file, method = "expand")
+
+#aoi <- fs::path(PEMprepr::read_fid()$dir_1010_vector$path_abs, "aoi_snapped.gpkg")
+aoi_path <- file.path(read_fid()$dir_1010_vector$path_abs, "aoi_snapped.gpkg")
+# raster
+
+# Prepare Raster Data(for 5m lidar template)
+
+r5 <- create_template_raster(aoi = aoi, res = 5)
+
+```
+
+### generate base vector layers
+
+```{r, eval = FALSE}
+
+create_base_vectors(aoi_path, out_dir = read_fid()$dir_1010_vector$path_abs)
+
+```
+
+### generate base DEM layer for modelling (5m)
+
+Uncertain here with lidr where it is getting the info for the DEM
+
+```{r, eval = FALSE}
+
+#1) option to use trim data 
+
+# dem = get_cded_dem(aoi = fs::path(read_fid()$dir_1020_covariates$path_abs, "25m", "template.tif"),
+#                    res = 5,
+#                    overwrite = TRUE)
+
+#2) option to use lidr 
+
+# dem = get_cded_dem(aoi = file.path(read_fid()$dir_1020_covariates$path_abs, "5m", "template.tif"),
+#                    res = 5,
+#                    overwrite = TRUE)
+
+```
+
+### Generate SAGA raster covariates for modelling (5m)
+
+```{r, eval = FALSE}
+
+# get model covariates 
+
+#find_saga_path()
+#saga = "C:/SAGA/"
+# saga_path <- file.path("C:", "Program Files", "QGIS 3.40.1", "apps", "saga")
+saga_cmd("C:/SAGA/saga_cmd.exe")
+tic()
+create_covariates(
+   dtm = file.path(read_fid()$dir_1020_covariates$path_abs,"5m","dem.tif"),
+   saga_path = saga_cmd(),
+   out_dir = read_fid()$dir_1020_covariates$path_abs,
+   layers = "all"
+)
+
+toc()
+```
+
+### Create a BGC raster to match the template sizes
+
+```{r, eval = FALSE}
+# generate a 5m raster
+bec_rast5 <- create_bgc_template(
+  field = "MAP_LABEL",
+  template =  r5,
+  write_output = FALSE
+)
+
+```
+
+congratulations you are now ready to start developing the sample plan
+
+
