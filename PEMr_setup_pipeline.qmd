@@ -1,0 +1,50 @@
+---
+title: "PEMr_setup"
+format: html
+cache: TRUE
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## 1. Preparing for a new PEM project
+
+The PEMr package is designed to help users access the functions and follow a workflow to create a Predictive Ecosystem Map project. The first step in this process is to prepare the basic working layers for an Area of Interest (AOI). This script pulls functions from the PEMprepR portion of the PEMr package. These packages are currently in development and there maybe breaking changes.
+
+The first step needed is to generate a new PEM project. This will include a new R-studio project, a template folder structure, and a series of template workflow quarto documents.
+
+## Download the latest development version of the packages
+
+```{r}
+#| eval: false
+remotes::install_github("ninoxconsulting/PEMr", build_vignettes = TRUE)
+remotes::install_github("ninoxconsulting/PEMprepr", build_vignettes = TRUE)
+library(PEMr)
+library(PEMprepr)
+
+```
+
+### Create folder structure for map project
+
+The first step is to decide on the file path where your mapping projects files will be stored. The choose a name for your map project (area of interest (AOI)). If you supply a spatial file of the map area boundary this will be copiedinto the new project files. Supplying this file not required at this stage but is a convenience feature.
+
+```{r}
+
+path = "D:/PEMr_test_aoi"
+aoi_name = "bdy_square_aoi"
+aoi_file = "D:/PEMr_test_aoi/bdy_square_aoi.gpkg"
+
+create_pemr_project(
+  path = path,
+  aoi_name = aoi_name,
+  aoi_file = aoi_file,
+  open=open
+)
+
+```
+
+From here on out, you should be running the pipeline scripts with in the project you just created.
