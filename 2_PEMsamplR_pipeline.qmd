@@ -47,6 +47,12 @@ The first step is to decide on the file path where your mapping projects files w
 #   readRDS(fid_path)
 # }
 
+  path = "D:/PEMr_test_aoi"
+  aoi_name = "Deception_Lake_original"
+  aoi_file = "D:/GitHub/PEM_pipeline/deception_aoi.gpkg"
+  open=FALSE
+  proj_dir <- file.path(path, aoi_name)
+
 fid <- read_fid()
 aoi_dir = read_fid()$dir_0010_vector$path_abs
 
