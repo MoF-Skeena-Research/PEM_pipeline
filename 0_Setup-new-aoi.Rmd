@@ -1,0 +1,90 @@
+---
+title: "Setup-new-aoi"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Setup-new-aoi}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## 1. Preparing for a new PEM project
+
+The PEMr package is designed to help users access the functions and follow a workflow to create a Predictive Ecosystem Map project. The first step in this process is to prepare the basic working layers for an Area of Interest (AOI). This script pulls functions from the PEMprepR portion of the PEMr package. These packages are currently in development and there maybe breaking changes.
+
+The first step needed is to generate a new PEM project. This will include a new R-studio project, a template folder structure, and a series of template workflow quarto documents.
+
+## Download the latest development version of the packages
+
+```{r}
+#| eval: false
+#remotes::install_github("ninoxconsulting/PEMr", build_vignettes = TRUE)
+#remotes::install_github("ninoxconsulting/PEMprepr", build_vignettes = TRUE)
+#remotes::install_github("ninoxconsulting/PEMsamplr", build_vignettes = TRUE)
+library(PEMr)
+library(PEMprepr)
+#require(PEMsamplr)
+#require(tictoc)
+# Function to copy files
+copy_files <- function(file_list, proj_dir) {
+  for (file in file_list) {
+    dest_file <- file.path(proj_dir, basename(file))
+    file_copy(file, dest_file)
+  }
+}
+
+```
+
+### Create folder structure for map project
+
+The first step is to decide on the file path where your mapping projects files will be stored. The choose a name for your map project (area of interest (AOI)). If you supply a spatial file of the map area boundary this will be copiedinto the new project files. Supplying this file not required at this stage but is a convenience feature.
+
+```{r}
+#| eval: false
+
+  path = "E:/PEM_AOIs"
+  aoi_name = "Deception_Lake"
+  aoi_file = "D:/GitHub/PEM_pipeline/deception_aoi.gpkg"
+  open=FALSE
+  proj_dir <- file.path(path, aoi_name)
+
+  create_pemr_project(
+  path = path,
+  aoi_name = aoi_name,
+  aoi_file = aoi_file ,
+   open=open
+)
+
+ copy_files("D:/GitHub/PEM_pipeline/deception_aoi.gpkg", aoi_dir) 
+```
+
+
+Copy pipeline QMD files into AOI directory
+```{r}
+# Load necessary library
+library(fs)
+
+# List of files to be copied
+file_list <- c("D:/GitHub/PEM_pipeline/1_PEMprepR_pipeline.qmd", 
+               "D:/GitHub/PEM_pipeline/2_PEMsamplR_pipeline.qmd",
+               "D:/GitHub/PEM_pipeline/3a_PEMmodelR_pipeline.qmd",
+               "D:/GitHub/PEM_pipeline/3b_PEMmodelR_nonfor_pipeline.qmd",
+               "D:/GitHub/PEM_pipeline/4_PEMmapR_pipeline.qmd")
+
+
+
+# Copy the files
+copy_files(file_list, proj_dir)
+
+```
+
+
+
+
+

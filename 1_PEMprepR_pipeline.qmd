@@ -1,0 +1,441 @@
+---
+title: "AOI PrepR report"
+author: "William H MacKenzie"
+date: "20/09/2024"
+format:
+  typst:
+    toc: true
+    toc-depth: 2
+    toc-title: Contents
+    section-numbering: 1.1.1
+    columns: 1
+editor: source
+execute:
+  echo: false
+  error: false
+  warning: false
+  message: false
+  fig.width: 6
+  fig.height: 4
+  fig.align: 'left'
+  fig.cap: true
+  fig.pos: H
+  out.width: '100%'
+  dev: pdf
+  fig.ext: pdf
+  cache: true
+  fig.retina: 2
+  dpi: 600
+  fig.asp: 1.5
+  fig.path: "./figures/"
+---
+# The first time this pipeline is run it downloads base files and generates SAGA covariates for modelling.
+This process is cached so that these functions are not rerun if there are no changes to inputs.
+The scripts then generate a summary report of the AOI
+
+```{r setup,  include=FALSE, warnings=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+library(PEMr)
+library(PEMprepr)
+require(tictoc)
+# Get the current working directory
+proj_dir <- getwd()
+fid <- read_fid()
+aoi_dir = read_fid()$dir_0010_vector$path_abs
+aoi_file = fs::path(aoi_dir, "aoi.gpkg")
+```
+
+```{r create template}
+#| eval: false
+
+#files <- list.files(aoi_dir, pattern = "([.]gpkg)|([.]shp)$")
+aoi_file = fs::path(aoi_dir, "aoi.gpkg")
+aoi_expand <- snap_aoi(aoi_file, method = "expand")
+aoi_expand <- fs::path(PEMprepr::read_fid()$dir_1010_vector$path_abs, "aoi_snapped.gpkg")
+r5 <- create_template_raster(aoi, res = 5)
+```
+
+```{r download base layers BCDataCatalogue}
+#| eval: false
+create_base_vectors(aoi_expand, out_dir = PEMprepr::read_fid()$dir_1010_vector$path_abs)
+```
+
+```{r generate or copy dem.tif}
+#| eval: false
+## copy a dem.tif file into 10_clean_inputs/20_covariates folder
+#1) option to use trim data as DEM
+
+# dem = get_cded_dem(aoi = fs::path(PEMprepr::read_fid()$dir_1020_covariates$path_abs, "25m", "template.tif"),
+#                    res = 5,
+#                    overwrite = TRUE)
+
+#2) option to use lidr functions to create dem from lidar LAS files
+```
+
+
+```{r create SAGA covariates }
+#| eval: false
+# 
+tic()
+#find_saga_path()
+saga_cmd("C:/SAGA/saga_cmd.exe")
+create_covariates(
+   dtm = fs::path(PEMprepr::read_fid()$dir_1020_covariates$path_rel,"5m","dem.tif"),
+   saga_path = saga_cmd(),
+   out_dir = PEMprepr::read_fid()$dir_1020_covariates$path_rel,
+   layers = "all"
+)
+toc()
+### Create a bec raster to match the template sizes 
+bec_rast5 <- create_bgc_template(
+  field = "MAP_LABEL",
+  template =  r5,
+  write_output = FALSE)
+```
+
+##Report
+
+```{r setup2, include = FALSE, warning=FALSE}
+
+# devtools::install_github("ropenscilabs/ochRe")
+
+require(tidyverse)
+require(magrittr)
+require(terra)
+require(sf)
+require(pals)
+require(ochRe)
+require(showtext)
+require(ggtext)
+require(gghighlight)
+require(ochRe)
+require(ggspatial)
+require(gt)
+require(tidyterra)
+require(ggpmisc)
+require(viridis)
+
+```
+
+```{r graphics-setup, include = FALSE}
+
+pal.parl <- colorRampPalette(ochRe::ochre_palettes[["parliament"]])
+pal.nam <- colorRampPalette(ochRe::ochre_palettes[["namatjira_qual"]])
+font_add_google('Anton', 'anton')
+showtext_auto()
+
+```
+
+This report provides several metrics of interest over the geographic extent of the AOI, including the distribution of forest age, dominant species, common disturbances, topographic variables, and others. It also summarizes key outputs from the prepR workflow and briefly describes their purpose in the modelling process. More details on the data, methodology, and results from the prepR workflow can be found in the \[PEM Manual\].
+
+
+```{r aoi-inset, echo = FALSE}
+
+#| fig-cap: "Figure 1: A map of where the [AOI_name] AOI is located in British Columbia."
+#| fig-width: 6
+#| fig-height: 4
+aoi_dir2 = read_fid()$dir_1010_vector$path_abs
+aoi = fs::path(aoi_dir, "aoi.gpkg")
+# aoi <- sf::st_read("C:/Users/ccarmour.stu/OneDrive - Government of BC/PEM/AOIs/DateCreek_AOI/0_raw_inputs/base_layers/aoi.gpkg", quiet = TRUE)
+### need to build this into the automatic download off BC data catalogue
+bc_outline <- sf::st_read("D:/GitHub/PEMtestr/summary_report/data/bc_outline.gpkg", quiet = TRUE)
+
+ggplot2::ggplot() +
+  tidyterra::geom_spatvector(data = terra::vect(bc_outline), fill = "floralwhite") +
+  tidyterra::geom_spatvector(data = terra::vect(aoi), color = "firebrick", fill = "floralwhite", linewidth = 1) +
+  ggspatial::annotation_north_arrow(
+    location = "tr", # Position: bottom-right
+    which_north = "true", # True North
+    pad_x = ggplot2::unit(0.5, "cm"), # Padding from x-axis
+    pad_y = ggplot2::unit(0.5, "cm"), # Padding from y-axis
+    style = ggspatial::north_arrow_fancy_orienteering() # Style of the arrow
+  )
+
+```
+
+```{r bec-map, echo = FALSE}
+
+#| fig-cap: "Figure 2: A map of BEC subzones, variants, and phases across [AOI_name]."
+#| fig-width: 6
+#| fig-height: 4
+bec = fs::path(aoi_dir2, "bec.gpkg")
+aoi_file = fs::path(aoi_dir, "aoi.gpkg")
+AOI <- vect(aoi_file)
+bec <- terra::vect(bec) %>% terra::crop(AOI)
+  #dplyr::mutate(BGC_LABEL = stringr::str_replace_all(BGC_LABEL, " ", ""))
+
+ggplot(data = bec, mapping = aes(fill = MAP_LABEL)) +
+  tidyterra::geom_spatvector(linewidth = 0) +
+  labs(fill = "BEC Subzone/Variant") +
+  ggspatial::annotation_north_arrow(
+    location = "tr", # Position: bottom-right
+    which_north = "true", # True North
+    pad_x = unit(0.5, "cm"), # Padding from x-axis
+    pad_y = unit(0.5, "cm"), # Padding from y-axis
+    style = ggspatial::north_arrow_fancy_orienteering() # Style of the arrow
+  ) +
+  theme(
+    legend.position = "bottom"
+  )
+
+```
+
+```{r bec-chart, echo = FALSE}
+
+#| fig-cap: "Table 1: A summary of BEC subzones and variants by land area."
+#| fig-width: 6
+#| fig-height: 4
+
+bec.df <- bec %>%
+  dplyr::mutate(AREA.METRES = terra::expanse(.)) %>%
+  #sf::st_drop_geometry() %>%
+  dplyr::group_by(MAP_LABEL) %>%
+  dplyr::summarize(AREA.BY.GRP = round(as.numeric(sum(AREA.METRES, na.rm = TRUE))/1000000, 2))
+
+ table <-  gt::gt(bec.df) %>% 
+  gt::summary_rows(
+    groups = TRUE,
+    columns = vars(AREA.BY.GRP),
+    fns =list(Total = ~sum(.)),
+    formatter = fmt_number,
+    use_seps = TRUE,
+    decimals = 2
+  ) %>% 
+  gt::tab_header(title = "BEC Subzone/Variant by Land Area") %>%
+  gt::cols_label(
+    MAP_LABEL = "Subzone/Variant",
+    AREA.BY.GRP = "Area (km^2)"
+  )
+ table
+
+```
+
+```{r forest-age, echo = FALSE}
+
+# #| fig-cap: "Figure 3: Distribution of forest age across [AOI_name], rounded to nearest decade. Polygons with an age of 250 years or greater were clamped to 250 years for visualization purposes."
+# #| fig-width: 6
+# #| fig-height: 4
+# vri = fs::path(aoi_dir2, "vri.gpkg")
+# vri <- terra::vect(vri) %>% terra::crop(AOI)
+# vri <- sf::st_as_sf(vri)
+# bec <- sf::st_as_sf(bec)
+# # vri <- sf::st_read("C:/Users/ccarmour.stu/OneDrive - Government of BC/PEM/AOIs/DateCreek_AOI/0_raw_inputs/base_layers/vri_detail.gpkg", quiet = TRUE) 
+# vri <- vri %>%
+#   sf::st_join(bec, join = st_intersects, quiet = TRUE, left = FALSE) %>%
+#   dplyr::mutate(PROJ_AGE_1 = case_when(
+#     PROJ_AGE_1 == 0 ~ NA_integer_,
+#     PROJ_AGE_1 > 840 ~ NA_integer_,
+#     PROJ_AGE_1 <= 840 & PROJ_AGE_1 > 250 ~ as.integer(250),
+#     TRUE ~ PROJ_AGE_1),
+#     AGE.ROUNDED = floor(PROJ_AGE_1 / 10) * 10,
+#     HARVEST_DATE = lubridate::ymd(HARVEST_DATE))
+# 
+# age.df <- vri %>%
+#   dplyr::mutate(AREA.METRES = sf::st_area(.)) %>%
+#   sf::st_drop_geometry() %>%
+#   dplyr::group_by(AGE.ROUNDED) %>%
+#   dplyr::summarize(AREA.BY.GRP = as.numeric(sum(AREA.METRES, na.rm = TRUE))/10000000) %>%
+#   dplyr::filter(!is.na(AGE.ROUNDED))
+# 
+# 
+# max.area = max(age.df$AREA.BY.GRP, na.rm = TRUE)
+# 
+# ggplot(age.df, aes(x = AGE.ROUNDED, y = AREA.BY.GRP)) +
+#   geom_bar(stat = "identity", fill = "goldenrod") +
+#   labs(
+#     # title = "Age Distribution of Forest Stands by Area",
+#     x = "Age (years)",
+#     y = "Total Area (1000s of hectares)",
+#   ) +
+#   scale_x_continuous(breaks = seq(0, 250, by = 10)) +
+#   scale_y_continuous(breaks = seq(0, max.area, by = 10)) +
+#   theme(
+#     # text = element_text(family = "anton"),
+#     panel.background = element_rect("transparent"),
+#     panel.grid.major = element_line(colour = "grey88"),
+#     # panel.grid.minor = element_line(colour = "grey88"),
+#     # axis.ticks = element_blank(),
+#     axis.text = element_text(size = 14),
+#     # axis.ticks = element_line(size = 0.5),
+#     axis.title.x = element_text(size = 14, face = "bold"),
+#     axis.title.y = element_text(size = 14, face = "bold"),
+#     legend.position = "bottom",
+#     panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5),
+#     plot.title = element_text(size = 45, hjust = 0.5),
+#   )
+
+```
+
+```{r forest-age-map, echo = FALSE}
+# 
+# #| fig-cap: "Figure 4: A map of forest age across [AOI_name]. Polygons with an age of 250 years or greater were clamped to 250 years for visualization purposes."
+# #| fig-width: 6
+# #| fig-height: 4
+# vri <- vri %>% mutate(PROJ_AGE_CLASS_CD_1 = as.numeric(PROJ_AGE_CLASS_CD_1))
+# ggplot() +
+#   tidyterra::geom_spatvector(data = dplyr::filter(vri, PROJ_AGE_CLASS_CD_1 > 0), mapping = aes(fill = PROJ_AGE_CLASS_CD_1), color = "transparent") +
+#   viridis::scale_fill_viridis(direction = -1, option = "A", discrete = TRUE) +
+#   labs(fill = "Age_Class") +
+#     ggspatial::annotation_north_arrow(
+#     location = "tr", # Position: bottom-right
+#     which_north = "true", # True North
+#     pad_x = unit(0.5, "cm"), # Padding from x-axis
+#     pad_y = unit(0.5, "cm"), # Padding from y-axis
+#     style = ggspatial::north_arrow_fancy_orienteering() # Style of the arrow
+#   ) +
+#   theme(
+#     legend.position = "bottom",
+#   )
+# 
+
+```
+
+```{r dist-type-map, echo = FALSE}
+
+# ggplot() +
+#   tidyterra::geom_spatvector(data = dplyr::filter(vri, PROJ_AGE_1 > 0), mapping = aes(fill = lubridate::year(HARVEST_DATE)), color = "transparent") +
+#   viridis::scale_fill_viridis(direction = -1, option = "B") +
+#   labs(fill = "Harvest Year") +
+#     ggspatial::annotation_north_arrow(
+#     location = "tr", # Position: bottom-right
+#     which_north = "true", # True North
+#     pad_x = unit(0.5, "cm"), # Padding from x-axis
+#     pad_y = unit(0.5, "cm"), # Padding from y-axis
+#     style = ggspatial::north_arrow_fancy_orienteering() # Style of the arrow
+#   ) +
+#   theme(
+#     legend.position = "bottom",
+#   )
+
+
+# water <- st_read("C:/Users/ccarmour.stu/OneDrive - Government of BC/PEM/AOIs/DateCreek_AOI/0_raw_inputs/base_layers/water.gpkg")
+# fire <- st_read("C:/Users/ccarmour.stu/OneDrive - Government of BC/PEM/AOIs/DateCreek_AOI/0_raw_inputs/base_layers/fires.gpkg")
+# roads <- st_read("C:/Users/ccarmour.stu/OneDrive - Government of BC/PEM/AOIs/DateCreek_AOI/0_raw_inputs/base_layers/roads_vetted.gpkg")
+
+```
+
+```{r species-dist, echo = FALSE}
+# 
+# species.df <- vri %>%
+#   dplyr::select(starts_with("SPECIES")) %>%
+#   dplyr::filter(!is.na(SPECIES_CD_1)) %>%
+#   dplyr::mutate(AREA.METRES = sf::st_area(.), # Compute area for polygon
+#                 AREA.SC.1 = AREA.METRES * as.numeric(SPECIES_PCT_1/100), # Multiply by species percentage for each code
+#                 AREA.SC.2 = AREA.METRES * as.numeric(SPECIES_PCT_2/100),
+#                 AREA.SC.3 = AREA.METRES * as.numeric(SPECIES_PCT_3/100),
+#                 AREA.SC.4 = AREA.METRES * as.numeric(SPECIES_PCT_4/100),
+#                 AREA.SC.5 = AREA.METRES * as.numeric(SPECIES_PCT_5/100)) %>%
+#   sf::st_drop_geometry()
+# 
+# cd.1 <- species.df %>%
+#   dplyr::group_by(SPECIES_CD_1) %>%
+#   dplyr::summarize(AREA.BY.GRP.1 = as.numeric(sum(AREA.SC.1, na.rm = TRUE))) %>%
+#   dplyr::rename(SPECIES.CD = SPECIES_CD_1) %>%
+#   dplyr::filter(!is.na(SPECIES.CD))
+# 
+# cd.2 <- species.df %>%
+#   dplyr::group_by(SPECIES_CD_2) %>%
+#   dplyr::summarize(AREA.BY.GRP.2 = as.numeric(sum(AREA.SC.2, na.rm = TRUE))) %>%
+#   dplyr::rename(SPECIES.CD = SPECIES_CD_2) %>%
+#   dplyr::filter(!is.na(SPECIES.CD))
+# 
+# cd.3 <- species.df %>%
+#   dplyr::group_by(SPECIES_CD_3) %>%
+#   dplyr::summarize(AREA.BY.GRP.3 = as.numeric(sum(AREA.SC.3, na.rm = TRUE))) %>%
+#   dplyr::rename(SPECIES.CD = SPECIES_CD_3) %>%
+#   dplyr::filter(!is.na(SPECIES.CD))
+# 
+# cd.4 <- species.df %>%
+#   dplyr::group_by(SPECIES_CD_4) %>%
+#   dplyr::summarize(AREA.BY.GRP.4 = as.numeric(sum(AREA.SC.4, na.rm = TRUE))) %>%
+#   dplyr::rename(SPECIES.CD = SPECIES_CD_4) %>%
+#   dplyr::filter(!is.na(SPECIES.CD))
+# 
+# cd.5 <- species.df %>%
+#   dplyr::group_by(SPECIES_CD_5) %>%
+#   dplyr::summarize(AREA.BY.GRP.5 = as.numeric(sum(AREA.SC.5, na.rm = TRUE))) %>%
+#   dplyr::rename(SPECIES.CD = SPECIES_CD_5) %>%
+#   dplyr::filter(!is.na(SPECIES.CD))
+# 
+# cd.all <- dplyr::full_join(x = cd.1, y = cd.2, by = ("SPECIES.CD"), keep = FALSE) %>%
+#   dplyr::full_join(x = ., y = cd.3, by = ("SPECIES.CD"), keep = FALSE) %>%
+#   dplyr::full_join(x = ., y = cd.4, by = ("SPECIES.CD"), keep = FALSE) %>%
+#   dplyr::full_join(x = ., y = cd.5, by = ("SPECIES.CD"), keep = FALSE) %>%
+#   dplyr::group_by(SPECIES.CD) %>%
+#   dplyr::rowwise() %>%
+#   dplyr::summarize(AREA.BY.GRP.TOTAL = sum(c(AREA.BY.GRP.1, AREA.BY.GRP.2, AREA.BY.GRP.3, AREA.BY.GRP.4, AREA.BY.GRP.5), na.rm = T)/100000) %>%
+#   dplyr::mutate(SPECIES.CD = as.factor(SPECIES.CD)) %>%
+#   dplyr::arrange(desc(AREA.BY.GRP.TOTAL))
+# 
+# max.area = max(cd.all$AREA.BY.GRP.TOTAL, na.rm = TRUE)
+# 
+# ggplot(cd.all, aes(x = reorder(SPECIES.CD, -AREA.BY.GRP.TOTAL), y = AREA.BY.GRP.TOTAL)) +
+#   geom_bar(stat = "identity", fill = pal.nam(8)[8]) +
+#   labs(
+#     # title = "Age Distribution of Forest Stands by Area",
+#     x = "Species Code",
+#     y = "Total Area (1000s of hectares)",
+#   ) +
+#   # scale_x_continuous(breaks = seq(0, 250, by = 10)) +
+#   scale_y_continuous(breaks = seq(0, max.area, by = floor(max.area/10))) +
+#   theme(
+#     # text = element_text(family = "anton"),
+#     panel.background = element_rect("transparent"),
+#     panel.grid.major = element_line(colour = "grey88"),
+#     # panel.grid.minor = element_line(colour = "grey88"),
+#     # axis.ticks = element_blank(),
+#     # axis.text = element_text(size = 24),
+#     # axis.ticks = element_line(size = 0.5),
+#     # axis.title.x = element_text(size = 32, face = "bold"),
+#     # axis.title.y = element_text(size = 32, face = "bold"),
+#     panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5),
+#     plot.title = element_text(size = 54, hjust = 0.5),
+#   )
+```
+
+```{r dem-metrics, echo = FALSE}
+
+# 
+# dem = fs::path(PEMprepr::read_fid()$dir_1020_covariates$path_rel,"5m","dem.tif") 
+# dem <- terra::rast(dem)
+# # dem.5m <- dem %>%
+# #   terra::aggregate(fact = 5, fun = "mean")
+# 
+# r.vals <- terra::values(dem, na.rm = TRUE)
+# 
+# elev.vals <- list(mean = mean(r.vals, na.rm = TRUE),
+#                   min = min(r.vals, na.rm = TRUE),
+#                   max = max(r.vals, na.rm = TRUE))
+
+```
+
+```{r covar-table, echo = FALSE}
+# cov_dir = read_fid()$dir_1020_covariates$path_abs
+# cov5m <- fs::path(cov_dir, "5m")
+# covars.df <- list.files(cov5m, pattern = ".tif$", full.names = TRUE) %>%
+#   terra::rast() %>%
+#   terra::values() %>%
+#   data.frame()
+# 
+# names(covars.df)[which(stringr::str_detect(names(covars.df), pattern = "sen_savi"))[2]] <- "sen_savi_6class"
+# 
+# covars.df %>%
+#   purrr::map(~ c(mean = mean(., na.rm = TRUE),
+#                  min = min(., na.rm = TRUE),
+#                  max = max(., na.rm = TRUE))) %>%
+#   as.data.frame() %>%
+#   rownames_to_column(var = "statistic")  %>%
+#   pivot_longer(-statistic, names_to = "covariate", values_to = "value") %>%
+#   pivot_wider(names_from = statistic, values_from = value) %>%
+#   mutate(across(c(mean, min, max), ~ round(.x, 4))) %>% 
+#   gt::gt()
+```
+
+
+
+
+Congratulations you are now ready to start developing the sample plan
+
